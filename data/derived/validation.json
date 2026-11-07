@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "rawSha256": "0eef90c9af71b2b32c842ce1a81e51280f20af82039574f60d1a34a9325657b0",
+  "exactPlanCoordinateSamples": 2461,
+  "maxCoordinateErrorMeters": 5.084229945850415e-13,
+  "directedReachableNodes": 2488,
+  "reverseReachableNodes": 2488,
+  "oneWayEdges": 912,
+  "maximumSyntheticGrade": 0.08500000000000002,
+  "validatedSurfaceTriangles": 356331,
+  "stops": 183,
+  "notes": "Source planar coordinates and OSM node identity retained. Rendered roads include disconnected clipped exits; the taxi graph uses only the largest strongly connected component."
+}

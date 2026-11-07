@@ -1,0 +1,24 @@
+{
+  "name": "Busan Haeundae–Suyeong River",
+  "center": {
+    "lat": 35.165,
+    "lon": 129.14
+  },
+  "bbox": {
+    "south": 35.151525270738205,
+    "west": 129.12351708760724,
+    "north": 35.178474729261794,
+    "east": 129.15648291239273
+  },
+  "extentMeters": 3000,
+  "units": "metres",
+  "axis": "Unity X east, Y up, Z north",
+  "projection": "Local equirectangular, WGS84 origin, radius 6378137m",
+  "retrievedAt": "2026-11-07T13:56:14.427Z",
+  "endpoint": "https://overpass-api.de/api/interpreter",
+  "source": "OpenStreetMap contributors",
+  "license": "ODbL-1.0",
+  "attribution": "© OpenStreetMap contributors",
+  "copyrightUrl": "https://www.openstreetmap.org/copyright",
+  "rawSha256": "0eef90c9af71b2b32c842ce1a81e51280f20af82039574f60d1a34a9325657b0"
+}
