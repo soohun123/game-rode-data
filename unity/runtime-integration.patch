@@ -1,0 +1,139 @@
+diff --git a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRoadNetwork.cs b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRoadNetwork.cs
+index d8a74fa..0e3c777 100644
+--- a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRoadNetwork.cs
++++ b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRoadNetwork.cs
+@@ -6,7 +6,7 @@ namespace DriveYourSuperTexi.CityPrototype
+     [DefaultExecutionOrder(-200)]
+     public sealed class CityRoadNetwork:MonoBehaviour
+     {
+-        [Serializable]public struct Edge{public int a,b;public float width;public Edge(int a,int b,float w){this.a=a;this.b=b;width=w;}}
++        [Serializable]public struct Edge{public int a,b;public float width;public bool oneWay;public string osmWayId,name;public int layer;public Edge(int a,int b,float w){this.a=a;this.b=b;width=w;oneWay=false;osmWayId=null;name=null;layer=0;}}
+         public Vector3[] nodes=Array.Empty<Vector3>();
+         public Edge[] edges=Array.Empty<Edge>();
+         private Dictionary<Vector2Int,List<int>> buckets;
+@@ -47,19 +47,20 @@ namespace DriveYourSuperTexi.CityPrototype
+             if(links==null)Prepare();var entry=Nearest(from,out int se);var exit=Nearest(to,out int te);
+             var result=new List<Vector3>{from};if(se<0||te<0){result.Add(to);return result;}
+             result.Add(entry);
+-            if(se==te){result.Add(exit);result.Add(to);return result;}
++            Projection(from,se,out float fromT);Projection(to,te,out float toT);
++            if(se==te&&(!edges[se].oneWay||fromT<=toT)){result.Add(exit);result.Add(to);return result;}
+             var cost=new float[nodes.Length];var prev=new int[nodes.Length];var used=new bool[nodes.Length];
+             for(int i=0;i<cost.Length;i++){cost[i]=float.PositiveInfinity;prev[i]=-1;}
+-            var start=edges[se];var end=edges[te];cost[start.a]=Vector3.Distance(entry,nodes[start.a]);cost[start.b]=Vector3.Distance(entry,nodes[start.b]);
++            var start=edges[se];var end=edges[te];cost[start.a]=start.oneWay?float.PositiveInfinity:Vector3.Distance(entry,nodes[start.a]);cost[start.b]=Vector3.Distance(entry,nodes[start.b]);
+             var open=new SortedSet<(float cost,int node)>();
+             open.Add((cost[start.a],start.a));open.Add((cost[start.b],start.b));
+             while(open.Count>0)
+             {
+                 var item=open.Min;open.Remove(item);int current=item.node;
+                 if(used[current]||item.cost>cost[current])continue;used[current]=true;
+-                foreach(int index in links[current]){var e=edges[index];int next=e.a==current?e.b:e.a;float value=cost[current]+Vector3.Distance(nodes[current],nodes[next]);if(value<cost[next]){cost[next]=value;prev[next]=current;open.Add((value,next));}}
++                foreach(int index in links[current]){var e=edges[index];if(e.oneWay&&e.a!=current)continue;int next=e.a==current?e.b:e.a;float value=cost[current]+Vector3.Distance(nodes[current],nodes[next]);if(value<cost[next]){cost[next]=value;prev[next]=current;open.Add((value,next));}}
+             }
+-            int finish=cost[end.a]+Vector3.Distance(exit,nodes[end.a])<cost[end.b]+Vector3.Distance(exit,nodes[end.b])?end.a:end.b;
++            int finish=end.oneWay?end.a:cost[end.a]+Vector3.Distance(exit,nodes[end.a])<cost[end.b]+Vector3.Distance(exit,nodes[end.b])?end.a:end.b;
+             if(float.IsInfinity(cost[finish])){result.Add(from);return result;}
+             var reverse=new List<Vector3>();for(int i=finish;i>=0;i=prev[i])reverse.Add(nodes[i]);reverse.Reverse();result.AddRange(reverse);result.Add(exit);result.Add(to);return result;
+         }
+diff --git a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityCivilianTraffic.cs b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityCivilianTraffic.cs
+index fb6112c..a8ac946 100644
+--- a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityCivilianTraffic.cs
++++ b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityCivilianTraffic.cs
+@@ -61,7 +61,7 @@ namespace DriveYourSuperTexi.CityPrototype
+             for (int i = 0; i < roads.edges.Length; i++)
+             {
+                 if (!Usable(i)) continue;
+-                var edge = roads.edges[i]; connections[edge.a].Add(i); connections[edge.b].Add(i);
++                var edge = roads.edges[i]; connections[edge.a].Add(i); if(!edge.oneWay)connections[edge.b].Add(i);
+             }
+             var pool = new GameObject("CivilianTrafficPool").transform; pool.SetParent(transform, false);
+             for (int i = 0; i < carCount; i++)
+@@ -81,7 +81,7 @@ namespace DriveYourSuperTexi.CityPrototype
+         {
+             var edge = roads.edges[index];
+             return edge.width >= 6 && edge.a >= 0 && edge.b >= 0 && edge.a < roads.nodes.Length && edge.b < roads.nodes.Length &&
+-                Vector3.ProjectOnPlane(roads.nodes[edge.a] - roads.nodes[edge.b], Vector3.up).magnitude >= 8;
++                Vector3.ProjectOnPlane(roads.nodes[edge.a] - roads.nodes[edge.b], Vector3.up).magnitude >= (RealRoadMap.Instance ? .25f : 8);
+         }
+         private Vector3 Direction(int from, int to) { return Vector3.ProjectOnPlane(roads.nodes[to] - roads.nodes[from], Vector3.up).normalized; }
+         private static Vector3 Right(Vector3 direction) { return Vector3.Cross(Vector3.up, direction); }
+@@ -134,7 +134,7 @@ namespace DriveYourSuperTexi.CityPrototype
+             for (int attempt = 0; attempt < 80; attempt++)
+             {
+                 int index = nearbyEdges[Random.Range(0, nearbyEdges.Count)]; var edge = roads.edges[index];
+-                int from = Random.value < .5f ? edge.a : edge.b, to = from == edge.a ? edge.b : edge.a;
++                int from = edge.oneWay || Random.value < .5f ? edge.a : edge.b, to = from == edge.a ? edge.b : edge.a;
+                 Vector3 direction = Direction(from, to);
+                 Vector3 point = Vector3.Lerp(roads.nodes[from], roads.nodes[to], Random.Range(.24f, .65f)) + Right(direction) * LaneOffset(index);
+                 float distance = Vector3.ProjectOnPlane(point - player.position, Vector3.up).magnitude;
+@@ -217,7 +217,7 @@ namespace DriveYourSuperTexi.CityPrototype
+             if (nearest < 0) return;
+             var edge = roads.edges[nearest];
+             bool forward = Vector3.Dot(Direction(edge.a, edge.b), a.car.transform.forward) >= 0;
+-            a.edge = nearest; a.from = forward ? edge.a : edge.b; a.to = forward ? edge.b : edge.a;
++            a.edge = nearest; a.from = edge.oneWay || forward ? edge.a : edge.b; a.to = edge.oneWay || forward ? edge.b : edge.a;
+             // If the collision carried the car past a junction, merge onto the next
+             // connected road instead of steering back towards a waypoint behind it.
+             Vector3 laneDirection = Direction(a.from, a.to);
+diff --git a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityPassengerService.cs b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityPassengerService.cs
+index 2dda36f..83b508b 100644
+--- a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityPassengerService.cs
++++ b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityPassengerService.cs
+@@ -92,7 +92,7 @@ namespace DriveYourSuperTexi.CityPrototype
+             if(CityRoadNetwork.Instance)
+             {
+                 var network=CityRoadNetwork.Instance;
+-                foreach(var edge in network.edges)
++                foreach(var edge in RealRoadMap.Instance?Array.Empty<CityRoadNetwork.Edge>():network.edges)
+                 {
+                     var a=network.nodes[edge.a];var b=network.nodes[edge.b];
+                     if(Vector3.Distance(a,b)<30)continue;
+@@ -109,12 +109,13 @@ namespace DriveYourSuperTexi.CityPrototype
+                         float lane=axis%500==0?6:2,walk=lane+5; candidates.Add(new Stop { road = new Vector3(axis + side * lane, .09f, along), pavement = new Vector3(axis + side * walk, .09f, along) });
+                         if(along!=350)candidates.Add(new Stop { road = new Vector3(along, .09f, axis + side * lane), pavement = new Vector3(along, .09f, axis + side * walk) });
+                     }
++            if(RealRoadMap.Instance)foreach(var stop in RealRoadMap.Instance.stops)candidates.Add(new Stop{road=stop.road,pavement=stop.pavement});
+             if(CityExpansionLayout.Instance)foreach(var stop in CityExpansionLayout.Instance.stops){candidates.RemoveAll(s=>FlatDistance(s.road,stop.road)<22);candidates.Add(new Stop{road=stop.road,pavement=stop.pavement});}
+             var airportPickup=GameObject.Find("AirportTaxiPickupStop");
+             if(airportPickup){var pavement=airportPickup.transform.Find("PassengerPavement");if(pavement){candidates.RemoveAll(stop=>FlatDistance(stop.road,airportPickup.transform.position)<18);candidates.Add(new Stop{road=airportPickup.transform.position+Vector3.up*.08f,pavement=pavement.position});}}
+             candidates.Sort((a, b) => FlatDistance(a.road, transform.position).CompareTo(FlatDistance(b.road, transform.position)));
+             CreateHUD(); FillWaiting(); RefreshHUD();
+-            if(!GetComponent<CitySpecialQuest>())gameObject.AddComponent<CitySpecialQuest>();
++            if(!RealRoadMap.Instance&&!GetComponent<CitySpecialQuest>())gameObject.AddComponent<CitySpecialQuest>();
+             if (!GetComponent<CityDrivingHUD>()) gameObject.AddComponent<CityDrivingHUD>();
+         }
+         private static float FlatDistance(Vector3 a, Vector3 b) { a.y = b.y = 0; return Vector3.Distance(a, b); }
+@@ -209,6 +210,7 @@ namespace DriveYourSuperTexi.CityPrototype
+         }
+         public static string LocationName(Vector3 p)
+         {
++            var realName=RealRoadMap.LocationName(p);if(realName!=null)return realName;
+             var expandedName=CityExpansionLayout.StopName(p);if(expandedName!=null)return expandedName;
+             var pickup=GameObject.Find("AirportTaxiPickupStop");if(pickup&&FlatDistance(p,pickup.transform.position)<18)return "공항 터미널 택시 탑승장";
+             return CityDistrictStreaming.District(p)+" "+(p.z<0?"남쪽":"북쪽")+" 거리";
+diff --git a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityDistrictStreaming.cs b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityDistrictStreaming.cs
+index 5b8601d..f77b1d3 100644
+--- a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityDistrictStreaming.cs
++++ b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityDistrictStreaming.cs
+@@ -36,6 +36,7 @@ namespace DriveYourSuperTexi.CityPrototype
+         public static Vector2Int Cell(Vector3 p) => new Vector2Int(Mathf.FloorToInt((p.x+HalfSize)/TileSize),Mathf.FloorToInt((p.z+HalfSize)/TileSize));
+         public static string District(Vector3 p)
+         {
++            if(RealRoadMap.Instance)return RealRoadMap.LocationName(p);
+             var expanded=CityExpansionLayout.Instance?CityExpansionLayout.District(p):null;if(expanded!=null)return expanded;
+             if(p.x>900)return "해변";
+             if(p.x<-700 && p.z>0)return "공항";
+diff --git a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRecovery.cs b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRecovery.cs
+index b29996f..97530c5 100644
+--- a/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRecovery.cs
++++ b/Assets/DriveYourSuperTexi/CityPrototype/Runtime/CityRecovery.cs
+@@ -40,7 +40,7 @@ namespace DriveYourSuperTexi.CityPrototype
+         {
+             Vector3 p = transform.position;
+             bool outside = Mathf.Abs(p.x) > worldHalfSize || Mathf.Abs(p.z) > worldHalfSize || p.y < minimumHeight;
+-            if(CityRoadNetwork.Instance&&p.y<-1.3f&&CityIslandLayout.Water(p.x,p.z))outside=true;
++            if(CityRoadNetwork.Instance&&p.y<-1.3f&&(RealRoadMap.Instance?RealRoadMap.WaterAt(p.x,p.z):CityIslandLayout.Water(p.x,p.z)))outside=true;
+             var rocket=GetComponent<RocketRoadster>();
+             bool trying = !(rocket&&rocket.IsFlying) && input != null && Mathf.Abs(input.Throttle) > 0.5f && input.Brake < 0.1f;
+             stuckTime = trying && car.SpeedKmh < 1f ? stuckTime + Time.fixedDeltaTime : 0;
