@@ -52,7 +52,8 @@ namespace DriveYourSuperTexi.EditorTools
             GroundMeshes(city,root.transform,data.terrain);
             Buildings(city,root.transform,data.buildings);
             Paint(city,root.transform,data);
-            Water(city,root.transform);
+            Water(city,root.transform,data.terrain);
+            info.water=data.terrain.colors.Select(IsWaterColor).ToArray();
             var tiles=new List<CityDistrictStreaming.Tile>();
             for(int x=-2;x<10;x++)for(int z=-2;z<10;z++){var tile=new GameObject("RealRoadSector_"+x+"_"+z);tile.transform.SetParent(root.transform,false);tile.transform.position=new Vector3(-875+x*250,0,-875+z*250);tiles.Add(new CityDistrictStreaming.Tile{root=tile.transform,index=new Vector2Int(x,z),buildings=Array.Empty<CityDistrictStreaming.Building>(),landmarks=Array.Empty<CityDistrictStreaming.Landmark>(),distantLandmarks=Array.Empty<Renderer>()});}
             city.tiles=tiles.ToArray();city.dropZones=Array.Empty<Transform>();
@@ -107,16 +108,35 @@ namespace DriveYourSuperTexi.EditorTools
             }
             var go=paint.Create("OSM_LaneMarkings",root,city.palette);go.GetComponent<MeshFilter>().sharedMesh=Save(go.GetComponent<MeshFilter>().sharedMesh,go.name);
         }
-        static void Water(CityDistrictStreaming city,Transform root)
+        static bool IsWaterColor(Color c)=>Mathf.Abs(c.r-.32f)<.001f&&Mathf.Abs(c.g-.34f)<.001f&&Mathf.Abs(c.b-.28f)<.001f;
+        static void Water(CityDistrictStreaming city,Transform root,Ground ground)
         {
             var shader=Shader.Find("Universal Render Pipeline/Lit");var material=new Material(shader){name="BusanRiverSea",color=new Color(.035f,.25f,.32f)};material.SetFloat("_Smoothness",.8f);AssetDatabase.CreateAsset(material,AssetDatabase.GenerateUniqueAssetPath(Folder+"/BusanRiverSea.mat"));
-            var mesh=new Mesh{vertices=new[]{new Vector3(-3500,-1.65f,-3500),new Vector3(-3500,-1.65f,3500),new Vector3(3500,-1.65f,3500),new Vector3(3500,-1.65f,-3500)},triangles=new[]{0,1,2,0,2,3}};mesh.RecalculateNormals();mesh.RecalculateBounds();Geometry("OSM_RiverAndSea",mesh,root,new[]{material},false);
+            var vertices=new List<Vector3>();var triangles=new List<int>();
+            void Quad(float x0,float z0,float x1,float z1){int n=vertices.Count;vertices.AddRange(new[]{new Vector3(x0,-1.65f,z0),new Vector3(x0,-1.65f,z1),new Vector3(x1,-1.65f,z1),new Vector3(x1,-1.65f,z0)});triangles.AddRange(new[]{n,n+1,n+2,n,n+2,n+3});}
+            for(int z=0;z<300;z++)for(int x=0;x<300;x++){int i=z*301+x;if(new[]{i,i+1,i+301,i+302}.Any(k=>IsWaterColor(ground.colors[k])))Quad(-1500+x*10,-1500+z*10,-1490+x*10,-1490+z*10);}
+            Quad(-3500,-3500,-1500,3500);Quad(1500,-3500,3500,3500);Quad(-1500,-3500,1500,-1500);Quad(-1500,1500,1500,3500);
+            var mesh=new Mesh{indexFormat=IndexFormat.UInt32};mesh.SetVertices(vertices);mesh.SetTriangles(triangles,0);mesh.RecalculateNormals();mesh.RecalculateBounds();Geometry("OSM_RiverAndSea",mesh,root,new[]{material},false);
+        }
+        public static string RefreshWaterAndSource()
+        {
+            if(Application.isPlaying)throw new Exception("Stop Play first");var city=Object.FindFirstObjectByType<CityDistrictStreaming>();var info=Object.FindFirstObjectByType<RealRoadMap>();var data=JsonUtility.FromJson<Package>(File.ReadAllText(Folder+"/unity-map.json"));
+            var old=info.transform.Find("OSM_RiverAndSea");if(old)Object.DestroyImmediate(old.gameObject);
+            Water(city,info.transform,data.terrain);info.water=data.terrain.colors.Select(IsWaterColor).ToArray();info.sourceCommit=File.ReadAllText(Folder+"/source-commit.txt").Trim();info.mapSha256=Hash(File.ReadAllBytes(Folder+"/unity-map.json"));EditorUtility.SetDirty(info);AssetDatabase.SaveAssets();EditorSceneManager.MarkSceneDirty(city.gameObject.scene);EditorSceneManager.SaveScene(city.gameObject.scene);return "Water restricted to source coast/river masks; road trenches remain dry";
+        }
+        public static string ReloadRepositoryGeometry()
+        {
+            if(Application.isPlaying)throw new Exception("Stop Play first");var city=Object.FindFirstObjectByType<CityDistrictStreaming>();var info=Object.FindFirstObjectByType<RealRoadMap>();var data=JsonUtility.FromJson<Package>(File.ReadAllText(Folder+"/unity-map.json"));
+            foreach(Transform t in info.transform.Cast<Transform>().ToArray())if(t.name.StartsWith("OSM_Ground_")||t.name.StartsWith("OSM_Buildings_"))Object.DestroyImmediate(t.gameObject);
+            GroundMeshes(city,info.transform,data.terrain);Buildings(city,info.transform,data.buildings);Physics.SyncTransforms();
+            info.stops=data.stops.Where(stop=>!Physics.CheckBox(stop.pavement+Vector3.up,new Vector3(.6f,.8f,.6f),Quaternion.identity,1<<LayerMask.NameToLayer("TaxiRoad"),QueryTriggerInteraction.Ignore)).ToArray();
+            RefreshWaterAndSource();return Verify();
         }
         public static string Verify()
         {
             var info=Object.FindFirstObjectByType<RealRoadMap>();var network=Object.FindFirstObjectByType<CityRoadNetwork>();var root=info.transform;int samples=0,covered=0;
             foreach(var col in root.GetComponentsInChildren<MeshCollider>().Where(c=>c.name.StartsWith("OSM_RoadLayer_")))
-            {var v=col.sharedMesh.vertices;var ts=col.sharedMesh.triangles;int step=Mathf.Max(1,ts.Length/3/8000);for(int i=0;i<ts.Length;i+=3*step){var p=(v[ts[i]]+v[ts[i+1]]+v[ts[i+2]])/3;foreach(var h in Physics.RaycastAll(p+Vector3.up*.2f,Vector3.up,3.5f,1<<LayerMask.NameToLayer("TaxiRoad")))if(h.collider.name.StartsWith("OSM_Buildings")||h.collider.name.StartsWith("OSM_Ground"))covered++;samples++;}}
+            {var v=col.sharedMesh.vertices;var ts=col.sharedMesh.triangles;int step=Mathf.Max(1,ts.Length/3/8000);for(int i=0;i<ts.Length;i+=3*step){var p=(v[ts[i]]+v[ts[i+1]]+v[ts[i+2]])/3;foreach(var h in Physics.RaycastAll(p+Vector3.up*220,Vector3.down,440,1<<LayerMask.NameToLayer("TaxiRoad"))){if(h.collider.name.StartsWith("OSM_Ground")&&h.point.y>p.y+.025f)covered++;if(h.collider.name.StartsWith("OSM_Buildings")&&h.point.y>p.y+.025f&&p.y>-.1f)covered++;}samples++;}}
             string report="Road sample headroom checks: "+samples+"; obstructed samples: "+covered+".\nTaxi graph: "+network.nodes.Length+" nodes / "+network.edges.Length+" edges; one-way edges "+network.edges.Count(e=>e.oneWay)+".\nClear curated stops: "+info.stops.Length+".\nData SHA256: "+info.mapSha256+"\nSource repository commit: "+info.sourceCommit+"\n";
             File.WriteAllText(Evidence+"/unity-validation.txt",report);return report;
         }
